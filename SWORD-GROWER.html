@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>SWORD GROWER - 極限の剣士</title>
+    <style>
+        body { margin: 0; background: #111; color: white; font-family: sans-serif; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        canvas { background: #1a1a1a; border: 4px solid #333; box-shadow: 0 0 20px rgba(0,0,0,0.5); cursor: crosshair; }
+        #ui-layer { position: absolute; pointer-events: none; width: 800px; height: 600px; }
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.8); }
+        #level-up-menu { display: none; background: rgba(0,0,0,0.9); border: 2px solid gold; padding: 20px; border-radius: 10px; pointer-events: auto; }
+        .skill-btn { width: 250px; margin: 10px; padding: 15px; background: #333; color: white; border: 1px solid #666; cursor: pointer; text-align: left; }
+        .skill-btn:hover { background: #555; border-color: gold; }
+        #hud { position: absolute; top: 10px; left: 10px; font-size: 18px; text-shadow: 2px 2px 2px black; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div id="hud">
+        TIME: <span id="time-val">03:00</span><br>
+        Lv: <span id="lv-val">1</span> | ATK: <span id="atk-val">10</span>
+    </div>
+
+    <div id="level-up-menu" class="overlay">
+        <h2 style="color:gold">LEVEL UP!</h2>
+        <p>強化するスキルを選べ</p>
+        <div id="skill-options"></div>
+    </div>
+</div>
+
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<script>
+/** * ゲーム設定 & クラス定義
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'TITLE'; // TITLE, PLAYING, LEVEL_UP, GAMEOVER, ENDING
+let timeLeft = 180;
+let enemies = [];
+let orbs = [];
+let bullets = [];
+let particles = [];
+let mouse = { x: 0, y: 0 };
+
+const player = {
+    x: 400, y: 300, radius: 15,
+    hp: 100, maxHp: 100,
+    level: 1, exp: 0, nextExp: 50,
+    attackPower: 10, attackRange: 60,
+    speed: 3, angle: 0,
+    isAttacking: false, attackFrame: 0, attackAngle: 0,
+    invincible: 0
+};
+
+const skills = [
+    { id: 'atk', name: '剛腕', desc: '攻撃力 +10', icon: '⚔️' },
+    { id: 'rng', name: '長剣', desc: 'リーチ +20', icon: '📏' },
+    { id: 'spd', name: '神速', desc: '移動速度 +0.5', icon: '👟' },
+    { id: 'hp',  name: '活力', desc: '最大HP +30 & 全回復', icon: '❤️' }
+];
+
+// 敵クラス
+class Enemy {
+    constructor(x, y, type = 'zombie') {
+        this.x = x; this.y = y; this.type = type;
+        this.hp = type === 'mage' ? 15 : 30;
+        this.maxHp = this.hp;
+        this.speed = type === 'mage' ? 1.2 : 1.8;
+        this.radius = 15;
+        this.shootTimer = 0;
+    }
+    update() {
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const angle = Math.atan2(dy, dx);
+
+        // 分離ロジック（重なり防止）
+        let vx = Math.cos(angle) * this.speed;
+        let vy = Math.sin(angle) * this.speed;
+
+        enemies.forEach(other => {
+            if (other === this) return;
+            const d = Math.sqrt((this.x-other.x)**2 + (this.y-other.y)**2);
+            if (d < 30) {
+                vx += (this.x - other.x) * 0.05;
+                vy += (this.y - other.y) * 0.05;
+            }
+        });
+
+        // 魔法使いの距離維持
+        if (this.type === 'mage' && dist < 200) {
+            this.x -= vx; this.y -= vy;
+            this.shootTimer++;
+            if (this.shootTimer > 100) {
+                bullets.push(new Bullet(this.x, this.y, player.x, player.y, false));
+                this.shootTimer = 0;
+            }
+        } else {
+            this.x += vx; this.y += vy;
+        }
+    }
+    draw() {
+        ctx.fillStyle = this.type === 'mage' ? '#a0f' : '#f44';
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2); ctx.fill();
+    }
+}
+
+// 弾丸クラス
+class Bullet {
+    constructor(x, y, tx, ty, isPlayer) {
+        this.x = x; this.y = y; this.isPlayer = isPlayer;
+        const angle = Math.atan2(ty - y, tx - x);
+        this.speed = isPlayer ? 10 : 4;
+        this.vx = Math.cos(angle) * this.speed;
+        this.vy = Math.sin(angle) * this.speed;
+        this.radius = 6;
+        this.alive = true;
+    }
+    update() {
+        this.x += this.vx; this.y += this.vy;
+        if (this.x < 0 || this.x > 800 || this.y < 0 || this.y > 600) this.alive = false;
+    }
+    draw() {
+        ctx.fillStyle = this.isPlayer ? 'cyan' : 'magenta';
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2); ctx.fill();
+    }
+}
+
+// 経験値オーブ
+class Orb {
+    constructor(x, y) { this.x = x; this.y = y; this.radius = 4; this.mag = false; }
+    update() {
+        const d = Math.sqrt((player.x-this.x)**2 + (player.y-this.y)**2);
+        if (d < 150) this.mag = true;
+        if (this.mag) {
+            const angle = Math.atan2(player.y-this.y, player.x-this.x);
+            this.x += Math.cos(angle) * 8; this.y += Math.sin(angle) * 8;
+        }
+    }
+    draw() {
+        ctx.fillStyle = '#0f8'; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2); ctx.fill();
+    }
+}
+
+/** * ゲームロジック
+ */
+function updateGame() {
+    // プレイヤー移動
+    const dx = mouse.x - player.x;
+    const dy = mouse.y - player.y;
+    player.angle = Math.atan2(dy, dx);
+    
+    // キー入力簡易実装（WASD）
+    // (ここでは自動移動or静止でも良いが、マウス方向へ微進する簡易仕様)
+    if (Math.sqrt(dx*dx+dy*dy) > 20) {
+        player.x += Math.cos(player.angle) * player.speed * 0.5;
+        player.y += Math.sin(player.angle) * player.speed * 0.5;
+    }
+
+    // 攻撃更新
+    if (player.isAttacking) {
+        player.attackFrame += 2;
+        if (player.attackFrame > 20) player.isAttacking = false;
+        
+        // 敵への当たり判定
+        enemies.forEach((en, i) => {
+            const dist = Math.sqrt((en.x-player.x)**2 + (en.y-player.y)**2);
+            if (dist < player.attackRange + 10) {
+                const a = Math.atan2(en.y-player.y, en.x-player.x);
+                let diff = a - player.attackAngle;
+                while(diff < -Math.PI) diff += Math.PI*2;
+                while(diff > Math.PI) diff -= Math.PI*2;
+                if (Math.abs(diff) < 0.8) {
+                    en.hp -= player.attackPower;
+                    if (en.hp <= 0) {
+                        orbs.push(new Orb(en.x, en.y));
+                        enemies.splice(i, 1);
+                    }
+                }
+            }
+        });
+
+        // 魔法反射
+        bullets.forEach(b => {
+            if (!b.isPlayer) {
+                const dist = Math.sqrt((b.x-player.x)**2 + (b.y-player.y)**2);
+                if (dist < player.attackRange) {
+                    b.isPlayer = true;
+                    b.vx *= -2; b.vy *= -2;
+                }
+            }
+        });
+    }
+
+    // 敵・オーブ・弾の更新
+    enemies.forEach(en => {
+        en.update();
+        const d = Math.sqrt((en.x-player.x)**2 + (en.y-player.y)**2);
+        if (d < 25 && player.invincible <= 0) {
+            player.hp -= 10; player.invincible = 60;
+        }
+    });
+
+    orbs.forEach((orb, i) => {
+        orb.update();
+        if (Math.sqrt((orb.x-player.x)**2 + (orb.y-player.y)**2) < 20) {
+            player.exp += 15;
+            orbs.splice(i, 1);
+            if (player.exp >= player.nextExp) startLevelUp();
+        }
+    });
+
+    bullets.forEach((b, i) => {
+        b.update();
+        if (b.isPlayer) {
+            enemies.forEach((en, ei) => {
+                if (Math.sqrt((en.x-b.x)**2 + (en.y-b.y)**2) < 20) {
+                    en.hp -= 50; b.alive = false;
+                    if (en.hp <= 0) enemies.splice(ei, 1);
+                }
+            });
+        }
+        if (!b.alive) bullets.splice(i, 1);
+    });
+
+    if (player.invincible > 0) player.invincible--;
+    if (player.hp <= 0) gameState = 'GAMEOVER';
+
+    // 敵スポーン
+    if (frameCount % 100 === 0) spawnEnemy();
+}
+
+/**
+ * 描画
+ */
+function drawGame() {
+    // プレイヤー描画
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.angle);
+    ctx.fillStyle = player.invincible % 4 < 2 ? 'white' : 'orange';
+    ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(-10, 10); ctx.lineTo(-10, -10); ctx.fill();
+    ctx.restore();
+
+    // 斬撃エフェクト
+    if (player.isAttacking) {
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.rotate(player.attackAngle);
+        ctx.strokeStyle = "rgba(255,255,255,"+(1-player.attackFrame/20)+")";
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(0, 0, player.attackRange, -0.8, -0.8 + (1.6 * (player.attackFrame/20)));
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    enemies.forEach(en => en.draw());
+    orbs.forEach(orb => orb.draw());
+    bullets.forEach(b => b.draw());
+
+    // UI更新
+    document.getElementById('lv-val').innerText = player.level;
+    document.getElementById('atk-val').innerText = player.attackPower;
+    const m = Math.floor(timeLeft / 60);
+    const s = timeLeft % 60;
+    document.getElementById('time-val').innerText = `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/**
+ * システム
+ */
+let frameCount = 0;
+function mainLoop() {
+    ctx.clearRect(0, 0, 800, 600);
+    if (gameState === 'TITLE') {
+        ctx.fillStyle = "white"; ctx.textAlign = "center";
+        ctx.font = "40px Arial"; ctx.fillText("SWORD GROWER", 400, 250);
+        ctx.font = "20px Arial"; ctx.fillText("CLICK TO START", 400, 350);
+    } else if (gameState === 'PLAYING') {
+        updateGame();
+        drawGame();
+        frameCount++;
+    } else if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = "red"; ctx.font = "50px Arial"; ctx.textAlign = "center";
+        ctx.fillText("GAME OVER", 400, 300);
+    } else if (gameState === 'ENDING') {
+        ctx.fillStyle = "gold"; ctx.font = "50px Arial"; ctx.textAlign = "center";
+        ctx.fillText("TIME UP! LEGEND KEEPER", 400, 300);
+    }
+    requestAnimationFrame(mainLoop);
+}
+
+function spawnEnemy() {
+    const side = Math.floor(Math.random() * 4);
+    let x, y;
+    if (side === 0) { x = Math.random()*800; y = -50; }
+    else if (side === 1) { x = 850; y = Math.random()*600; }
+    else if (side === 2) { x = Math.random()*800; y = 650; }
+    else { x = -50; y = Math.random()*600; }
+    enemies.push(new Enemy(x, y, Math.random() > 0.8 ? 'mage' : 'zombie'));
+}
+
+function startLevelUp() {
+    gameState = 'LEVEL_UP';
+    document.getElementById('level-up-menu').style.display = 'flex';
+    const container = document.getElementById('skill-options');
+    container.innerHTML = '';
+    const choices = [...skills].sort(() => 0.5 - Math.random()).slice(0, 3);
+    choices.forEach(sk => {
+        const b = document.createElement('button');
+        b.className = 'skill-btn';
+        b.innerHTML = `${sk.icon} <b>${sk.name}</b><br><small>${sk.desc}</small>`;
+        b.onclick = () => {
+            if (sk.id === 'atk') player.attackPower += 10;
+            if (sk.id === 'rng') player.attackRange += 20;
+            if (sk.id === 'spd') player.speed += 0.5;
+            if (sk.id === 'hp') { player.maxHp += 30; player.hp = player.maxHp; }
+            player.level++; player.exp = 0; player.nextExp *= 1.2;
+            document.getElementById('level-up-menu').style.display = 'none';
+            gameState = 'PLAYING';
+        };
+        container.appendChild(b);
+    });
+}
+
+function resetGame() {
+    player.hp = 100; player.level = 1; enemies = []; orbs = []; bullets = []; timeLeft = 180;
+}
+
+canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top;
+});
+
+canvas.addEventListener('mousedown', () => {
+    if (gameState === 'TITLE' || gameState === 'GAMEOVER' || gameState === 'ENDING') {
+        resetGame(); gameState = 'PLAYING';
+    } else if (gameState === 'PLAYING') {
+        if (!player.isAttacking) {
+            player.isAttacking = true; player.attackFrame = 0; player.attackAngle = player.angle;
+        }
+    }
+});
+
+setInterval(() => { if (gameState === 'PLAYING') { timeLeft--; if (timeLeft <= 0) gameState = 'ENDING'; } }, 1000);
+
+mainLoop();
+</script>
+</body>
+</html>
