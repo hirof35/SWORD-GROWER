@@ -3,3 +3,5 @@ git clone https://github.com/your-username/sword-grower.git
 cd sword-grower
 open index.html
 📈 スキルリストスキルアイコン効果剛腕⚔️攻撃力（ATK）が 10 上昇長剣📏斬撃のリーチが 20 上昇神速👟移動速度が 0.5 上昇活力❤️最大HPが 30 上昇し、HPを全回復📝 ライセンスこのプロジェクトは MITライセンス の下で公開されています。Created with JavaScript and Passion.💡 今後のアップデート予定[ ] 複数の武器種（槍、斧など）の実装[ ] ボスモンスターの追加[ ] 経験値引き継ぎによる永続強化システム
+
+<img width="1919" height="1029" alt="スクリーンショット 2026-04-30 182814" src="https://github.com/user-attachments/assets/f1da5b07-82ee-41e4-b2b3-16702874db6c" />
